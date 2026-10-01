@@ -72,4 +72,8 @@ Stop the services with `docker compose down`. Data remains in the named PostgreS
 make test
 ```
 
-The full product and architecture specification is in [PROJECT_PLAN.md](PROJECT_PLAN.md).
+## Project documentation
+
+- [Product and technical plan](PROJECT_PLAN.md)
+- [Design system](design-system.md)
+- [Database schema](database-schema.md)
