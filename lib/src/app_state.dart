@@ -95,6 +95,8 @@ class AppController extends Notifier<AppState> {
     }
     state = state.copyWith(
       busy: false,
+      favorites: const {},
+      accessibleRoutes: false,
       user: const AppUser(
         name: 'Campus Visitor',
         email: 'Guest session',
@@ -204,13 +206,12 @@ class AppController extends Notifier<AppState> {
   }
 
   void toggleFavorite(int id) {
+    if (state.user?.role == UserRole.guest) return;
     final next = {...state.favorites};
     final removing = next.contains(id);
     removing ? next.remove(id) : next.add(id);
     state = state.copyWith(favorites: next);
-    if (state.user?.role != UserRole.guest) {
-      unawaited(removing ? _api.removeFavorite(id) : _api.addFavorite(id));
-    }
+    unawaited(removing ? _api.removeFavorite(id) : _api.addFavorite(id));
   }
 
   Future<void> logout() async {

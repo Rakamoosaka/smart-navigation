@@ -14,6 +14,9 @@ class ProfileScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appProvider);
     final user = state.user!;
+    if (user.role == UserRole.guest) {
+      return const _GuestAccountScreen();
+    }
     final favorites = state.locations
         .where((e) => state.favorites.contains(e.id))
         .toList();
@@ -267,6 +270,127 @@ class ProfileScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _GuestAccountScreen extends ConsumerWidget {
+  const _GuestAccountScreen();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => SafeArea(
+    bottom: false,
+    child: ListView(
+      padding: const EdgeInsets.fromLTRB(20, 28, 20, 32),
+      children: [
+        const CircleAvatar(
+          radius: 34,
+          backgroundColor: AppColors.navy,
+          child: Icon(Icons.person_outline, color: Colors.white, size: 34),
+        ),
+        const SizedBox(height: 14),
+        const Text(
+          'Browsing as Guest',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 24,
+            color: AppColors.navy,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'You can use the campus map, search, public routes, the assistant, and announcements.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: AppColors.muted, height: 1.4),
+        ),
+        const SizedBox(height: 24),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Log in to unlock',
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: AppColors.navy,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const _GuestLockedFeature(
+                  Icons.bookmark_border,
+                  'Saved places',
+                ),
+                const _GuestLockedFeature(
+                  Icons.tune,
+                  'Saved accessibility preferences',
+                ),
+                const _GuestLockedFeature(
+                  Icons.calendar_month_outlined,
+                  'Personal schedules and next class',
+                ),
+                const _GuestLockedFeature(
+                  Icons.flag_outlined,
+                  'Information reports',
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () async {
+                      await ref.read(appProvider.notifier).logout();
+                      if (context.mounted) context.go('/login');
+                    },
+                    icon: const Icon(Icons.login),
+                    label: const Text('Log in'),
+                  ),
+                ),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    onPressed: () async {
+                      await ref.read(appProvider.notifier).logout();
+                      if (context.mounted) context.go('/register');
+                    },
+                    child: const Text('Create account'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: () async {
+            await ref.read(appProvider.notifier).logout();
+            if (context.mounted) context.go('/welcome');
+          },
+          icon: const Icon(Icons.logout),
+          label: const Text('End guest session'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _GuestLockedFeature extends StatelessWidget {
+  const _GuestLockedFeature(this.icon, this.label);
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(
+      children: [
+        Icon(icon, size: 20, color: AppColors.muted),
+        const SizedBox(width: 10),
+        Expanded(child: Text(label)),
+        const Icon(Icons.lock_outline, size: 18, color: AppColors.muted),
+      ],
+    ),
+  );
 }
 
 class _StudentSummary extends StatelessWidget {

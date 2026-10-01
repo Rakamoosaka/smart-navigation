@@ -511,6 +511,9 @@ class _LocationSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final isGuest = ref.watch(
+      appProvider.select((s) => s.user?.role == UserRole.guest),
+    );
     final saved = ref.watch(
       appProvider.select((s) => s.favorites.contains(location.id)),
     );
@@ -552,14 +555,16 @@ class _LocationSheet extends ConsumerWidget {
                   ],
                 ),
               ),
-              IconButton(
-                onPressed: () =>
-                    ref.read(appProvider.notifier).toggleFavorite(location.id),
-                icon: Icon(
-                  saved ? Icons.bookmark : Icons.bookmark_border,
-                  color: saved ? AppColors.gold : AppColors.navy,
+              if (!isGuest)
+                IconButton(
+                  onPressed: () => ref
+                      .read(appProvider.notifier)
+                      .toggleFavorite(location.id),
+                  icon: Icon(
+                    saved ? Icons.bookmark : Icons.bookmark_border,
+                    color: saved ? AppColors.gold : AppColors.navy,
+                  ),
                 ),
-              ),
             ],
           ),
           const SizedBox(height: 18),
@@ -578,14 +583,16 @@ class _LocationSheet extends ConsumerWidget {
           const SizedBox(height: 18),
           Row(
             children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _report(context, location),
-                  icon: const Icon(Icons.flag_outlined),
-                  label: const Text('Report info'),
+              if (!isGuest) ...[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _report(context, location),
+                    icon: const Icon(Icons.flag_outlined),
+                    label: const Text('Report info'),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
+                const SizedBox(width: 10),
+              ],
               Expanded(
                 child: FilledButton.icon(
                   onPressed: onRoute,

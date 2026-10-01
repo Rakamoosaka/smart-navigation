@@ -63,7 +63,7 @@ Role assignment is fully local to the project database. If the team later define
 - SDU ID/password registration and login.
 - JWT session and logout.
 - Role-specific dashboard.
-- Profile, faculty, saved locations, and accessibility preferences.
+- Registered-user profile, faculty, saved locations, and saved accessibility preferences.
 
 ### B. Search and locations
 
@@ -71,7 +71,7 @@ Role assignment is fully local to the project database. If the team later define
 - Search by room code, location name, service, category, and aliases.
 - Search facilities: printers, cafeterias, ATMs, restrooms, parking, library, offices, laboratories, security, and medical point.
 - Tolerant search: spelling normalization, aliases, and suggestion list.
-- Location details: building, floor, opening hours, contact details, accessibility information, save button, and route button.
+- Location details: building, floor, opening hours, contact details, accessibility information, route button, and a registered-user-only save button.
 - Library and office/service directory.
 
 ### C. Map and navigation
@@ -154,7 +154,7 @@ Role assignment is fully local to the project database. If the team later define
 
 10. Student panel — next class, timetable, class-to-map route action, favourites, accessibility preferences, reports, and profile.
 11. Teacher panel — teaching schedule, assigned rooms, office hours, reports, and profile.
-12. Guest/profile panel — temporary favourites, temporary accessibility preferences, and guest session information.
+12. Guest account panel — public-feature summary, login/register prompts, and end-session action. No favourites, saved preferences, schedules, or reporting.
 
 ### Administration
 
@@ -310,11 +310,12 @@ FastAPI dependencies enforce permissions, for example `require_role('admin')`.
 | Capability | Guest | Student | Teacher | Admin |
 |---|:---:|:---:|:---:|:---:|
 | Search, services, public map, routes | Yes | Yes | Yes | Yes |
-| Accessibility route preference | Temporary | Yes | Yes | Yes |
-| Favourites | Temporary/local | Yes | Yes | Yes |
+| Accessible route option | Yes | Yes | Yes | Yes |
+| Saved accessibility preference | No | Yes | Yes | Yes |
+| Favourites | No | Yes | Yes | Yes |
 | Personal timetable/next class | No | Yes | No | Optional |
 | Teaching schedule/office hours | No | No | Yes | Manage all |
-| Submit report | Optional | Yes | Yes | Yes |
+| Submit report | No | Yes | Yes | Yes |
 | Announcements/events | View | View | View | Manage |
 | Manage locations/services/routes | No | No | No | Yes |
 | Resolve reports | No | No | No | Yes |
