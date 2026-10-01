@@ -26,6 +26,10 @@ The running schema is created from the SQLModel classes in `backend/app/main.py`
 
 The following diagram shows the logical relationships used by the application service layer.
 
+![SDU Campus Assistant database entity-relationship diagram](docs/database-erd.svg)
+
+Presentation exports are available as [`docs/database-erd.svg`](docs/database-erd.svg) and [`docs/database-erd.png`](docs/database-erd.png). The SVG is recommended for slides because it remains sharp at any size.
+
 ```mermaid
 erDiagram
     user ||--|| authaccount : authenticates_with
@@ -431,4 +435,3 @@ ORDER BY r.created_at DESC;
 | PostgreSQL service configuration | `docker-compose.yml` |
 | API request/response documentation | `http://127.0.0.1:8000/docs` |
 | Product and role scope | `PROJECT_PLAN.md` |
-

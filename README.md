@@ -77,3 +77,4 @@ make test
 - [Product and technical plan](PROJECT_PLAN.md)
 - [Design system](design-system.md)
 - [Database schema](database-schema.md)
+- [Database ERD image](docs/database-erd.svg)
