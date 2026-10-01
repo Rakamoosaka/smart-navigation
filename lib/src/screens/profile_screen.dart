@@ -8,7 +8,9 @@ import '../theme.dart';
 import 'admin_screen.dart';
 
 class ProfileScreen extends ConsumerWidget {
-  const ProfileScreen({super.key});
+  const ProfileScreen({super.key, required this.onOpenLocation});
+
+  final ValueChanged<CampusLocation> onOpenLocation;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -125,6 +127,7 @@ class ProfileScreen extends ConsumerWidget {
           ...favorites.map(
             (location) => Card(
               child: ListTile(
+                onTap: () => onOpenLocation(location),
                 leading: Icon(location.icon, color: AppColors.blue),
                 title: Text(location.name),
                 subtitle: Text('${location.block} · ${location.floor}'),

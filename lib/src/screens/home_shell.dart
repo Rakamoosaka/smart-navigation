@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models.dart';
 import 'assistant_screen.dart';
 import 'map_screen.dart';
 import 'profile_screen.dart';
@@ -14,16 +15,28 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
+  CampusLocation? _locationToOpen;
+
+  void _openLocation(CampusLocation location) {
+    setState(() {
+      _locationToOpen = location;
+      _index = 0;
+    });
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
     body: IndexedStack(
       index: _index,
       children: [
-        CampusMapScreen(onOpenAssistant: () => setState(() => _index = 1)),
+        CampusMapScreen(
+          onOpenAssistant: () => setState(() => _index = 1),
+          locationToOpen: _locationToOpen,
+          onLocationOpened: () => setState(() => _locationToOpen = null),
+        ),
         CampusAssistantScreen(onShowMap: () => setState(() => _index = 0)),
         UpdatesScreen(onShowMap: () => setState(() => _index = 0)),
-        const ProfileScreen(),
+        ProfileScreen(onOpenLocation: _openLocation),
       ],
     ),
     bottomNavigationBar: NavigationBar(

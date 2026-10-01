@@ -7,8 +7,15 @@ import '../models.dart';
 import '../theme.dart';
 
 class CampusMapScreen extends ConsumerStatefulWidget {
-  const CampusMapScreen({super.key, required this.onOpenAssistant});
+  const CampusMapScreen({
+    super.key,
+    required this.onOpenAssistant,
+    required this.locationToOpen,
+    required this.onLocationOpened,
+  });
   final VoidCallback onOpenAssistant;
+  final CampusLocation? locationToOpen;
+  final VoidCallback onLocationOpened;
 
   @override
   ConsumerState<CampusMapScreen> createState() => _CampusMapScreenState();
@@ -17,6 +24,18 @@ class CampusMapScreen extends ConsumerStatefulWidget {
 class _CampusMapScreenState extends ConsumerState<CampusMapScreen> {
   String _category = 'All';
   final _search = TextEditingController();
+
+  @override
+  void didUpdateWidget(covariant CampusMapScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final location = widget.locationToOpen;
+    if (location == null || oldWidget.locationToOpen?.id == location.id) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _showLocation(location);
+      widget.onLocationOpened();
+    });
+  }
 
   @override
   void dispose() {
