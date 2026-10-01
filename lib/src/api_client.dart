@@ -20,21 +20,39 @@ class ApiClient {
 
   final Dio _dio;
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
+  static const _tokenKey = 'access_token_v2';
 
   Future<Options> _authorized() async {
-    final token = await _storage.read(key: 'access_token');
+    final token = await _storage.read(key: _tokenKey);
     if (token == null) throw StateError('No active session');
     return Options(headers: {'Authorization': 'Bearer $token'});
   }
 
-  Future<Map<String, dynamic>> login(String email) async {
+  Future<Map<String, dynamic>> login(String sduId, String password) async {
     final response = await _dio.post(
-      '/auth/register-or-login',
-      data: {'email': email},
+      '/auth/login',
+      data: {'sdu_id': sduId, 'password': password},
     );
     final data = Map<String, dynamic>.from(response.data as Map);
     await _storage.write(
-      key: 'access_token',
+      key: _tokenKey,
+      value: data['access_token'] as String?,
+    );
+    return data;
+  }
+
+  Future<Map<String, dynamic>> register(
+    String sduId,
+    String fullName,
+    String password,
+  ) async {
+    final response = await _dio.post(
+      '/auth/register',
+      data: {'sdu_id': sduId, 'full_name': fullName, 'password': password},
+    );
+    final data = Map<String, dynamic>.from(response.data as Map);
+    await _storage.write(
+      key: _tokenKey,
       value: data['access_token'] as String?,
     );
     return data;
@@ -44,7 +62,7 @@ class ApiClient {
     final response = await _dio.post('/auth/guest');
     final data = Map<String, dynamic>.from(response.data as Map);
     await _storage.write(
-      key: 'access_token',
+      key: _tokenKey,
       value: data['access_token'] as String?,
     );
     return data;
@@ -60,7 +78,7 @@ class ApiClient {
 
   Future<Map<String, dynamic>?> restoreUser() async {
     try {
-      if (await _storage.read(key: 'access_token') == null) return null;
+      if (await _storage.read(key: _tokenKey) == null) return null;
       final response = await _dio.get(
         '/users/me',
         options: await _authorized(),
@@ -128,5 +146,8 @@ class ApiClient {
     );
   }
 
-  Future<void> logout() => _storage.delete(key: 'access_token');
+  Future<void> logout() async {
+    await _storage.delete(key: _tokenKey);
+    await _storage.delete(key: 'access_token');
+  }
 }

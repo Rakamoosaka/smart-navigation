@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'api_client.dart';
@@ -73,7 +74,7 @@ class AppController extends Notifier<AppState> {
     final result = await _api.restoreUser();
     if (result == null) return false;
     final role = _roleFromString(result['role']?.toString());
-    final email = result['email']?.toString() ?? 'Guest session';
+    final email = result['sdu_id']?.toString() ?? 'Guest session';
     final name =
         result['full_name']?.toString() ??
         result['name']?.toString() ??
@@ -103,31 +104,60 @@ class AppController extends Notifier<AppState> {
     await _syncRemote();
   }
 
-  Future<String?> login(String email) async {
-    final normalized = email.trim().toLowerCase();
-    if (!RegExp(r'^\d{9}@sdu\.edu\.kz$').hasMatch(normalized)) {
-      return 'Use a 9-digit SDU email, for example 240103049@sdu.edu.kz';
+  Future<String?> login(String sduId, String password) async {
+    final normalized = sduId.trim();
+    if (!RegExp(r'^\d{9}$').hasMatch(normalized)) {
+      return 'Enter your 9-digit SDU ID';
     }
     state = state.copyWith(busy: true);
-    var role = UserRole.student;
-    var name = _demoName(normalized);
     try {
-      final result = await _api.login(normalized);
-      role = _roleFromString(result['role']?.toString());
-      name = result['name']?.toString() ?? name;
-    } catch (_) {
-      role = normalized.startsWith('240000002')
-          ? UserRole.admin
-          : normalized.startsWith('240000001')
-          ? UserRole.teacher
-          : UserRole.student;
+      final result = await _api.login(normalized, password);
+      final role = _roleFromString(result['role']?.toString());
+      final name = result['name']?.toString() ?? _demoName(normalized);
+      state = state.copyWith(
+        busy: false,
+        user: AppUser(name: name, email: normalized, role: role),
+      );
+      await _syncRemote();
+      return null;
+    } catch (error) {
+      state = state.copyWith(busy: false);
+      return _friendlyError(error, 'Unable to log in. Check your connection.');
     }
-    state = state.copyWith(
-      busy: false,
-      user: AppUser(name: name, email: normalized, role: role),
-    );
-    await _syncRemote();
-    return null;
+  }
+
+  Future<String?> register(
+    String sduId,
+    String fullName,
+    String password,
+  ) async {
+    final normalized = sduId.trim();
+    if (!RegExp(r'^\d{9}$').hasMatch(normalized)) {
+      return 'Enter your 9-digit SDU ID';
+    }
+    if (fullName.trim().length < 2) return 'Enter your full name';
+    if (password.length < 8) return 'Password must be at least 8 characters';
+    state = state.copyWith(busy: true);
+    try {
+      final result = await _api.register(normalized, fullName.trim(), password);
+      final role = _roleFromString(result['role']?.toString());
+      state = state.copyWith(
+        busy: false,
+        user: AppUser(
+          name: result['name']?.toString() ?? fullName.trim(),
+          email: normalized,
+          role: role,
+        ),
+      );
+      await _syncRemote();
+      return null;
+    } catch (error) {
+      state = state.copyWith(busy: false);
+      return _friendlyError(
+        error,
+        'Unable to create account. Check your connection.',
+      );
+    }
   }
 
   Future<void> _syncRemote() async {
@@ -207,15 +237,23 @@ class AppController extends Notifier<AppState> {
     _ => UserRole.student,
   };
 
+  static String _friendlyError(Object error, String fallback) {
+    if (error is DioException && error.response?.data is Map) {
+      final detail = (error.response!.data as Map)['detail'];
+      if (detail is String && detail.isNotEmpty) return detail;
+    }
+    return fallback;
+  }
+
   static String _demoName(String email) =>
       const {
-        '240103049@sdu.edu.kz': 'Yerassyl',
-        '240103050@sdu.edu.kz': 'Daulet',
-        '240103051@sdu.edu.kz': 'Omar',
-        '240103052@sdu.edu.kz': 'Aitore',
-        '240103053@sdu.edu.kz': 'Aidyn',
-        '240000001@sdu.edu.kz': 'Dr. Ayan',
-        '240000002@sdu.edu.kz': 'Campus Admin',
+        '240103049': 'Yerassyl',
+        '240103050': 'Daulet',
+        '240103051': 'Omar',
+        '240103052': 'Aitore',
+        '240103053': 'Aidyn',
+        '240000001': 'Dr. Ayan',
+        '240000002': 'Campus Admin',
       }[email] ??
       'SDU Student';
 }

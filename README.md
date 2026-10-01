@@ -5,7 +5,7 @@ A map-first Flutter mobile app with a FastAPI backend and PostgreSQL database. T
 ## Included demo flows
 
 - Guest entry without registration.
-- SDU email login with automatic Student, Teacher, or Administrator role.
+- SDU ID/password registration and login with automatic Student, Teacher, or Administrator role.
 - Interactive, zoomable SDU map with searchable pins and category filters.
 - Location details, favourites, accessible route preference, walking time, and route steps.
 - Student next class and timetable.
@@ -18,15 +18,17 @@ A map-first Flutter mobile app with a FastAPI backend and PostgreSQL database. T
 
 ## Demo accounts
 
-| Role | Email |
+| Role | SDU ID |
 |---|---|
-| Student (Yerassyl) | `240103049@sdu.edu.kz` |
-| Student (Daulet) | `240103050@sdu.edu.kz` |
-| Student (Omar) | `240103051@sdu.edu.kz` |
-| Student (Aitore) | `240103052@sdu.edu.kz` |
-| Student (Aidyn) | `240103053@sdu.edu.kz` |
-| Teacher | `240000001@sdu.edu.kz` |
-| Administrator | `240000002@sdu.edu.kz` |
+| Student (Yerassyl) | `240103049` |
+| Student (Daulet) | `240103050` |
+| Student (Omar) | `240103051` |
+| Student (Aitore) | `240103052` |
+| Student (Aidyn) | `240103053` |
+| Teacher | `240000001` |
+| Administrator | `240000002` |
+
+All seeded accounts use the password `Campus123!`. New 9-digit IDs can be registered from the app and receive the Student role by default.
 
 ## Fastest local demonstration
 

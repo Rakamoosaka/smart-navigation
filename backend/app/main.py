@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from uuid import uuid4
@@ -27,6 +31,14 @@ class User(SQLModel, table=True):
     role: str = Field(default="student", index=True)
     faculty: str = "SDU"
     active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AuthAccount(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    sdu_id: str = Field(index=True, unique=True)
+    password_hash: str
+    user_id: int = Field(index=True, unique=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -121,7 +133,14 @@ class SearchLog(SQLModel, table=True):
 
 
 class LoginRequest(BaseModel):
-    email: str
+    sdu_id: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    sdu_id: str
+    full_name: str
+    password: str
 
 
 class ReportRequest(BaseModel):
@@ -171,6 +190,50 @@ def make_token(subject: str, role: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 
+def normalize_sdu_id(value: str) -> str:
+    sdu_id = value.strip()
+    if not re.fullmatch(r"\d{9}", sdu_id):
+        raise HTTPException(status_code=422, detail="Enter your 9-digit SDU ID")
+    return sdu_id
+
+
+def hash_password(password: str) -> str:
+    if len(password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    iterations = 600_000
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    return "$".join([
+        "pbkdf2-sha256",
+        str(iterations),
+        base64.urlsafe_b64encode(salt).decode(),
+        base64.urlsafe_b64encode(digest).decode(),
+    ])
+
+
+def verify_password(password: str, encoded: str) -> bool:
+    try:
+        algorithm, raw_iterations, raw_salt, raw_digest = encoded.split("$", 3)
+        if algorithm != "pbkdf2-sha256":
+            return False
+        salt = base64.urlsafe_b64decode(raw_salt.encode())
+        expected = base64.urlsafe_b64decode(raw_digest.encode())
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, int(raw_iterations))
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def user_for_identity(identity: dict, session: Session) -> User | None:
+    subject = identity["sub"]
+    if re.fullmatch(r"\d{9}", subject):
+        account = session.exec(select(AuthAccount).where(AuthAccount.sdu_id == subject)).first()
+        return session.get(User, account.user_id) if account else None
+    if "@" in subject:
+        return session.exec(select(User).where(User.email == subject)).first()
+    return None
+
+
 def current_identity(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)]) -> dict:
     if not credentials:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -193,14 +256,15 @@ AdminIdentity = Annotated[dict, Depends(admin_only)]
 
 
 DEMO_USERS = {
-    "240103049@sdu.edu.kz": "Yerassyl",
-    "240103050@sdu.edu.kz": "Daulet",
-    "240103051@sdu.edu.kz": "Omar",
-    "240103052@sdu.edu.kz": "Aitore",
-    "240103053@sdu.edu.kz": "Aidyn",
-    "240000001@sdu.edu.kz": "Dr. Ayan",
-    "240000002@sdu.edu.kz": "Campus Admin",
+    "240103049": "Yerassyl",
+    "240103050": "Daulet",
+    "240103051": "Omar",
+    "240103052": "Aitore",
+    "240103053": "Aidyn",
+    "240000001": "Dr. Ayan",
+    "240000002": "Campus Admin",
 }
+DEMO_PASSWORD = "Campus123!"
 
 LOCATION_SEEDS = [
     ("Main Entrance", "Entrance", "Block C", "Ground floor", .72, .76, "entrance c,main door"),
@@ -226,6 +290,19 @@ def seed_database() -> None:
                 RoleOverride(email="240000001@sdu.edu.kz", role="teacher"),
                 RoleOverride(email="240000002@sdu.edu.kz", role="admin"),
             ])
+        for sdu_id, full_name in DEMO_USERS.items():
+            email = f"{sdu_id}@sdu.edu.kz"
+            role = "teacher" if sdu_id == "240000001" else "admin" if sdu_id == "240000002" else "student"
+            user = session.exec(select(User).where(User.email == email)).first()
+            if user is None:
+                user = User(full_name=full_name, email=email, role=role)
+                session.add(user)
+                session.flush()
+            else:
+                user.role = role
+            account = session.exec(select(AuthAccount).where(AuthAccount.sdu_id == sdu_id)).first()
+            if account is None:
+                session.add(AuthAccount(sdu_id=sdu_id, password_hash=hash_password(DEMO_PASSWORD), user_id=user.id))
         if session.exec(select(Location)).first() is None:
             for name, category, block, floor, x, y, aliases in LOCATION_SEEDS:
                 hours = "08:00–22:00" if name == "Library" else "08:00–18:00"
@@ -237,7 +314,8 @@ def seed_database() -> None:
                 Announcement(title="Block F printer maintenance", body="Use the printer in Block D until 14:00.", location_id=7),
             ])
         if session.exec(select(CampusClass)).first() is None:
-            for email in DEMO_USERS:
+            for sdu_id in DEMO_USERS:
+                email = f"{sdu_id}@sdu.edu.kz"
                 session.add(CampusClass(owner_email=email, course="Project Management", room="317", starts_at="10:30", location_id=4, kind="teacher" if email == "240000001@sdu.edu.kz" else "student"))
         session.commit()
 
@@ -256,22 +334,40 @@ def health() -> dict:
     return {"status": "ok", "database": DATABASE_URL.split(":", 1)[0]}
 
 
-@app.post("/auth/register-or-login", tags=["Authentication"])
-def register_or_login(body: LoginRequest, session: DbSession) -> dict:
-    email = body.email.strip().lower()
-    if not re.fullmatch(r"\d{9}@sdu\.edu\.kz", email):
-        raise HTTPException(status_code=422, detail="A valid 9-digit @sdu.edu.kz email is required")
+@app.post("/auth/register", status_code=201, tags=["Authentication"])
+def register(body: RegisterRequest, session: DbSession) -> dict:
+    sdu_id = normalize_sdu_id(body.sdu_id)
+    full_name = body.full_name.strip()
+    if len(full_name) < 2:
+        raise HTTPException(status_code=422, detail="Enter your full name")
+    if session.exec(select(AuthAccount).where(AuthAccount.sdu_id == sdu_id)).first():
+        raise HTTPException(status_code=409, detail="This SDU ID is already registered")
+    email = f"{sdu_id}@sdu.edu.kz"
     override = session.exec(select(RoleOverride).where(RoleOverride.email == email)).first()
     role = override.role if override else "student"
     user = session.exec(select(User).where(User.email == email)).first()
     if user is None:
-        user = User(full_name=DEMO_USERS.get(email, "SDU Student"), email=email, role=role)
+        user = User(full_name=full_name, email=email, role=role)
         session.add(user)
+        session.flush()
     else:
+        user.full_name = full_name
         user.role = role
+    session.add(AuthAccount(sdu_id=sdu_id, password_hash=hash_password(body.password), user_id=user.id))
     session.commit()
-    session.refresh(user)
-    return {"access_token": make_token(email, role), "token_type": "bearer", "name": user.full_name, "email": email, "role": role}
+    return {"access_token": make_token(sdu_id, role), "token_type": "bearer", "name": user.full_name, "sdu_id": sdu_id, "role": role}
+
+
+@app.post("/auth/login", tags=["Authentication"])
+def login(body: LoginRequest, session: DbSession) -> dict:
+    sdu_id = normalize_sdu_id(body.sdu_id)
+    account = session.exec(select(AuthAccount).where(AuthAccount.sdu_id == sdu_id)).first()
+    if account is None or not verify_password(body.password, account.password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect ID or password")
+    user = session.get(User, account.user_id)
+    if user is None or not user.active:
+        raise HTTPException(status_code=403, detail="This account is unavailable")
+    return {"access_token": make_token(sdu_id, user.role), "token_type": "bearer", "name": user.full_name, "sdu_id": sdu_id, "role": user.role}
 
 
 @app.post("/auth/guest", tags=["Authentication"])
@@ -284,13 +380,15 @@ def guest(session: DbSession) -> dict:
 
 @app.get("/users/me", tags=["Users"])
 def me(identity: Identity, session: DbSession) -> dict:
-    user = session.exec(select(User).where(User.email == identity["sub"])).first()
-    return user.model_dump() if user else {"name": "Campus Visitor", "role": "guest", "session": identity["sub"]}
+    user = user_for_identity(identity, session)
+    if user:
+        return {**user.model_dump(), "sdu_id": user.email.split("@", 1)[0]}
+    return {"name": "Campus Visitor", "role": "guest", "session": identity["sub"]}
 
 
 @app.get("/users/me/preferences", tags=["Users"])
 def get_preferences(identity: Identity, session: DbSession) -> dict:
-    user = session.exec(select(User).where(User.email == identity["sub"])).first()
+    user = user_for_identity(identity, session)
     if not user:
         raise HTTPException(status_code=403, detail="Registered account required")
     preference = session.exec(select(Preference).where(Preference.user_id == user.id)).first()
@@ -304,7 +402,7 @@ def get_preferences(identity: Identity, session: DbSession) -> dict:
 
 @app.put("/users/me/preferences", tags=["Users"])
 def update_preferences(body: PreferenceRequest, identity: Identity, session: DbSession) -> dict:
-    user = session.exec(select(User).where(User.email == identity["sub"])).first()
+    user = user_for_identity(identity, session)
     if not user:
         raise HTTPException(status_code=403, detail="Registered account required")
     preference = session.exec(select(Preference).where(Preference.user_id == user.id)).first()
@@ -374,24 +472,33 @@ def assistant(body: AssistantRequest, session: DbSession) -> dict:
 
 @app.get("/students/me/timetable", response_model=list[CampusClass], tags=["Schedules"])
 def student_timetable(identity: Identity, session: DbSession) -> list[CampusClass]:
-    return list(session.exec(select(CampusClass).where(CampusClass.owner_email == identity["sub"])).all())
+    user = user_for_identity(identity, session)
+    if not user:
+        raise HTTPException(status_code=403, detail="Registered account required")
+    return list(session.exec(select(CampusClass).where(CampusClass.owner_email == user.email)).all())
 
 
 @app.get("/students/me/next-class", response_model=CampusClass | None, tags=["Schedules"])
 def next_class(identity: Identity, session: DbSession):
-    return session.exec(select(CampusClass).where(CampusClass.owner_email == identity["sub"])).first()
+    user = user_for_identity(identity, session)
+    if not user:
+        raise HTTPException(status_code=403, detail="Registered account required")
+    return session.exec(select(CampusClass).where(CampusClass.owner_email == user.email)).first()
 
 
 @app.get("/teachers/me/schedule", response_model=list[CampusClass], tags=["Schedules"])
 def teacher_schedule(identity: Identity, session: DbSession) -> list[CampusClass]:
     if identity["role"] not in {"teacher", "admin"}:
         raise HTTPException(status_code=403, detail="Teacher role required")
-    return list(session.exec(select(CampusClass).where(CampusClass.owner_email == identity["sub"])).all())
+    user = user_for_identity(identity, session)
+    if not user:
+        raise HTTPException(status_code=403, detail="Registered account required")
+    return list(session.exec(select(CampusClass).where(CampusClass.owner_email == user.email)).all())
 
 
 @app.get("/users/me/favorites", response_model=list[Location], tags=["Users"])
 def favorites(identity: Identity, session: DbSession) -> list[Location]:
-    user = session.exec(select(User).where(User.email == identity["sub"])).first()
+    user = user_for_identity(identity, session)
     if not user:
         return []
     ids = [fav.location_id for fav in session.exec(select(Favorite).where(Favorite.user_id == user.id)).all()]
@@ -400,7 +507,7 @@ def favorites(identity: Identity, session: DbSession) -> list[Location]:
 
 @app.post("/users/me/favorites/{location_id}", status_code=201, tags=["Users"])
 def add_favorite(location_id: int, identity: Identity, session: DbSession) -> dict:
-    user = session.exec(select(User).where(User.email == identity["sub"])).first()
+    user = user_for_identity(identity, session)
     if not user:
         raise HTTPException(status_code=403, detail="Registered account required")
     existing = session.exec(select(Favorite).where(Favorite.user_id == user.id, Favorite.location_id == location_id)).first()
@@ -412,7 +519,7 @@ def add_favorite(location_id: int, identity: Identity, session: DbSession) -> di
 
 @app.delete("/users/me/favorites/{location_id}", tags=["Users"])
 def remove_favorite(location_id: int, identity: Identity, session: DbSession) -> dict:
-    user = session.exec(select(User).where(User.email == identity["sub"])).first()
+    user = user_for_identity(identity, session)
     if user:
         existing = session.exec(select(Favorite).where(Favorite.user_id == user.id, Favorite.location_id == location_id)).first()
         if existing:

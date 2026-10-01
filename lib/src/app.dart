@@ -11,6 +11,7 @@ final _router = GoRouter(
     GoRoute(path: '/', builder: (_, _) => const SplashScreen()),
     GoRoute(path: '/welcome', builder: (_, _) => const WelcomeScreen()),
     GoRoute(path: '/login', builder: (_, _) => const LoginScreen()),
+    GoRoute(path: '/register', builder: (_, _) => const RegisterScreen()),
     GoRoute(path: '/home', builder: (_, _) => const HomeShell()),
   ],
 );

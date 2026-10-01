@@ -21,9 +21,9 @@ A user may hold more than one role. For example, an administrator can also be a 
 
 ### Registration flow
 
-1. User enters an institutional email, for example `240103049@sdu.edu.kz`.
-2. Backend validates the email format and `@sdu.edu.kz` domain.
-3. Backend finds or creates the user record.
+1. User chooses **Create account** and enters a 9-digit SDU ID, full name, password, and password confirmation.
+2. Backend validates the ID and password, hashes the password, and creates the account.
+3. On later visits, the user signs in with the SDU ID and password.
 4. Backend determines the role from its role rules and role overrides.
 5. Backend issues a JWT access token.
 6. Flutter stores the token securely and opens the correct dashboard.
@@ -40,16 +40,18 @@ The actual SDU number rules are not yet available, so the system must not preten
 
 For the project demo:
 
-- Any valid `#########@sdu.edu.kz` email defaults to **Student**.
+- Any valid 9-digit SDU ID defaults to **Student**.
 - A `role_overrides` table assigns selected demonstration IDs to **Teacher** or **Administrator**.
 - Example seeded demo records:
-  - `240103049@sdu.edu.kz` → Student (Yerassyl)
-  - `240103050@sdu.edu.kz` → Student (Daulet)
-  - `240103051@sdu.edu.kz` → Student (Omar)
-  - `240103052@sdu.edu.kz` → Student (Aitore)
-  - `240103053@sdu.edu.kz` → Student (Aidyn)
-  - `240000001@sdu.edu.kz` → Teacher
-  - `240000002@sdu.edu.kz` → Administrator
+  - `240103049` → Student (Yerassyl)
+  - `240103050` → Student (Daulet)
+  - `240103051` → Student (Omar)
+  - `240103052` → Student (Aitore)
+  - `240103053` → Student (Aidyn)
+  - `240000001` → Teacher
+  - `240000002` → Administrator
+
+All seeded accounts use `Campus123!` for the classroom demonstration. Passwords are stored only as salted PBKDF2 hashes.
 
 Role assignment is fully local to the project database. If the team later defines more number-pattern rules, they can be added to the role rule configuration without changing the Flutter screens.
 
@@ -58,7 +60,7 @@ Role assignment is fully local to the project database. If the team later define
 ### A. Access and profile
 
 - Student, teacher, administrator, and guest entry.
-- Institutional email registration/login.
+- SDU ID/password registration and login.
 - JWT session and logout.
 - Role-specific dashboard.
 - Profile, faculty, saved locations, and accessibility preferences.
@@ -137,7 +139,7 @@ Role assignment is fully local to the project database. If the team later define
 
 1. Splash screen
 2. Welcome screen — **Continue as Student** or **Continue as Guest**
-3. Email login / registration
+3. SDU ID/password login and registration
 
 ### Core map experience (the primary app)
 
@@ -232,10 +234,11 @@ role_overrides
 
 Important fields:
 
-- `users`: id, full_name, email, faculty, status, created_at.
+- `users`: id, full_name, internal identity key, faculty, status, created_at.
+- `auth_accounts`: id, user_id, SDU ID, password hash, created_at.
 - `roles`: id, name (`guest`, `student`, `teacher`, `admin`).
 - `user_roles`: user_id, role_id.
-- `role_overrides`: institutional email or numeric ID, role_id, reason.
+- `role_overrides`: SDU ID, role_id, reason.
 - `locations`: name, category, building, floor, coordinates, contact details, opening hours, accessibility notes.
 - `map_markers`: location_id, x/y position expressed as percentages of the map artwork, icon/category, and label.
 - `map_zones`: block or facility area, polygon points expressed as percentages of the map artwork, location_id, and selectable state.
@@ -248,7 +251,8 @@ Important fields:
 ### Authentication and identity
 
 ```text
-POST /auth/register-or-login
+POST /auth/register
+POST /auth/login
 POST /auth/guest
 POST /auth/refresh
 POST /auth/logout
@@ -321,7 +325,7 @@ FastAPI dependencies enforce permissions, for example `require_role('admin')`.
 
 The project is ready for demonstration when:
 
-1. A valid SDU-format email is registered/logged in and receives a role.
+1. A valid 9-digit SDU ID can be registered with a password, logged in, and assigned the correct role.
 2. Guest entry works without an institutional account.
 3. Flutter opens every guest, student, and teacher on the interactive campus map.
 4. The supplied SDU map has tappable blocks, facilities, entrances, and service pins; selecting one opens its details.
