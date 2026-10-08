@@ -1,14 +1,14 @@
 # SDU Campus Assistant
 
-A map-first Flutter mobile app with a FastAPI backend and PostgreSQL database. The supplied SDU campus plan is interactive: users can search, tap location pins, view details, save places, ask the assistant, and display seeded walking routes.
+A map-first Flutter mobile app with a FastAPI backend and PostgreSQL database. The supplied SDU vector campus plan is interactive: users can search, tap rooms and service markers, view details, save places, inspect floor connections and calculate draft floor-1 routes over a traced corridor network. Routes are explicitly schematic, with approximate doorway connections and no invented distances or walking times.
 
 ## Included demo flows
 
 - Guest entry without registration.
 - SDU ID/password registration and login with automatic Student, Teacher, or Administrator role.
 - Interactive, zoomable SDU map with searchable pins and category filters.
-- Location details, favourites, accessible route preference, walking time, and route steps.
-- Student next class and timetable.
+- Location details, favourites, manually selected route starts/destinations, and persisted avoid-stairs preference. Step-free access is not certified.
+- Demonstration student timetable; its classrooms are not verified on this map.
 - Teacher teaching schedule and office details.
 - Rule-based campus assistant with clarification and map actions.
 - Announcements linked to map locations.
@@ -74,6 +74,7 @@ make test
 
 ## Project documentation
 
+- [Map integration and remaining survey work](docs/map-integration.md)
 - [Product and technical plan](PROJECT_PLAN.md)
 - [Design system](design-system.md)
 - [Database schema](database-schema.md)

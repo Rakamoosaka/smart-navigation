@@ -106,9 +106,9 @@ class ProfileScreen extends ConsumerWidget {
               ),
             ),
           const SizedBox(height: 18),
-          const Text(
-            'Saved places',
-            style: TextStyle(
+          Text(
+            'Saved places (${state.favorites.length}/5)',
+            style: const TextStyle(
               fontSize: 19,
               color: AppColors.navy,
               fontWeight: FontWeight.w800,
@@ -132,9 +132,15 @@ class ProfileScreen extends ConsumerWidget {
                 title: Text(location.name),
                 subtitle: Text('${location.block} · ${location.floor}'),
                 trailing: IconButton(
-                  onPressed: () => ref
-                      .read(appProvider.notifier)
-                      .toggleFavorite(location.id),
+                  onPressed: () async {
+                    final error = await ref
+                        .read(appProvider.notifier)
+                        .toggleFavorite(location.id);
+                    if (error != null && context.mounted) {
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(SnackBar(content: Text(error)));
+                    }
+                  },
                   icon: const Icon(Icons.bookmark, color: AppColors.gold),
                 ),
               ),
@@ -152,11 +158,11 @@ class ProfileScreen extends ConsumerWidget {
                     color: AppColors.blue,
                   ),
                   title: const Text(
-                    'Accessible routes',
+                    'Accessibility preference',
                     style: TextStyle(fontWeight: FontWeight.w700),
                   ),
                   subtitle: const Text(
-                    'Prefer elevators and step-free entrances',
+                    'Avoid staircase endpoints. Cross-floor and verified step-free routes are not available yet.',
                   ),
                 ),
                 const Divider(height: 1),
@@ -301,7 +307,7 @@ class _GuestAccountScreen extends ConsumerWidget {
         ),
         const SizedBox(height: 6),
         const Text(
-          'You can use the campus map, search, public routes, the assistant, and announcements.',
+          'You can use the campus map, search, floor connections, the assistant, and announcements.',
           textAlign: TextAlign.center,
           style: TextStyle(color: AppColors.muted, height: 1.4),
         ),

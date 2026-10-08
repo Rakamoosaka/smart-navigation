@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../app_state.dart';
+import '../models.dart';
 import '../theme.dart';
 
 class UpdatesScreen extends ConsumerWidget {
   const UpdatesScreen({super.key, required this.onShowMap});
-  final VoidCallback onShowMap;
+  final ValueChanged<CampusLocation> onShowMap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -78,7 +79,7 @@ class UpdatesScreen extends ConsumerWidget {
                         height: 1.4,
                       ),
                     ),
-                    if (item.locationId != null)
+                    if (state.locations.any((e) => e.id == item.locationId))
                       TextButton.icon(
                         onPressed: () {
                           ref
@@ -88,7 +89,11 @@ class UpdatesScreen extends ConsumerWidget {
                                   (e) => e.id == item.locationId,
                                 ),
                               );
-                          onShowMap();
+                          onShowMap(
+                            state.locations.firstWhere(
+                              (e) => e.id == item.locationId,
+                            ),
+                          );
                         },
                         icon: const Icon(Icons.location_on_outlined),
                         label: const Text('View location'),

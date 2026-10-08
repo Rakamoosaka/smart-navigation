@@ -1,8 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../app_state.dart';
-import '../demo_data.dart';
+import '../api_client.dart';
+import '../demo_data.dart' as catalog;
 import '../models.dart';
 import '../theme.dart';
 
@@ -16,755 +20,895 @@ class CampusMapScreen extends ConsumerStatefulWidget {
   final VoidCallback onOpenAssistant;
   final CampusLocation? locationToOpen;
   final VoidCallback onLocationOpened;
-
   @override
   ConsumerState<CampusMapScreen> createState() => _CampusMapScreenState();
 }
 
 class _CampusMapScreenState extends ConsumerState<CampusMapScreen> {
-  String _category = 'All';
+  final _transform = TransformationController();
   final _search = TextEditingController();
+  String _category = 'All';
+  Size _viewport = Size.zero;
+  bool _fitted = false;
+  Map<String, dynamic>? _route;
+  bool _routeable(CampusLocation place) =>
+      (catalog.campusRouting['attachments'] as Map? ?? {}).containsKey(
+        place.mapKey,
+      );
+
+  Future<void> _planRoute(CampusLocation destination) async {
+    final starts = ref.read(appProvider).locations.where(_routeable).toList();
+    if (starts.isEmpty) return;
+    var start =
+        starts.where((p) => p.id == 1 && p.id != destination.id).firstOrNull ??
+        starts.where((p) => p.id != destination.id).firstOrNull ??
+        starts.first;
+    final avoidStairs = ref.read(appProvider).accessibleRoutes;
+    var busy = false;
+    String? error;
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, update) => SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Plan a draft route',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 12),
+                Text('To: ${destination.name} · Floor 1'),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int>(
+                  initialValue: start.id,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Start location (selected manually)',
+                  ),
+                  items: starts
+                      .map(
+                        (p) => DropdownMenuItem(
+                          value: p.id,
+                          child: Text(p.name, overflow: TextOverflow.ellipsis),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: busy
+                      ? null
+                      : (id) => update(
+                          () => start = starts.singleWhere((p) => p.id == id),
+                        ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Traced from the schematic. Dashed ends indicate approximate doorways. Other floors, distance and walking time are not available.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      error!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          update(() {
+                            busy = true;
+                            error = null;
+                          });
+                          try {
+                            final route = await ApiClient().draftRoute(
+                              start.id,
+                              destination.id,
+                              avoidStairs,
+                            );
+                            if (!sheetContext.mounted) return;
+                            if (route['status'] != 'schematic_draft') {
+                              update(() {
+                                busy = false;
+                                error =
+                                    route['message']?.toString() ??
+                                    'No draft route found.';
+                              });
+                              return;
+                            }
+                            Navigator.pop(sheetContext, route);
+                          } catch (_) {
+                            if (sheetContext.mounted) {
+                              update(() {
+                                busy = false;
+                                error = 'Cannot reach the route service. Start the backend and try again.';
+                              });
+                            }
+                          }
+                        },
+                  icon: busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.route),
+                  label: Text(busy ? 'Calculating…' : 'Show draft route'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (!mounted || result == null) return;
+    setState(() {
+      _route = result;
+      _search.clear();
+      _category = 'All';
+    });
+    _fitRoute(result);
+  }
+
+  void _fitRoute(Map<String, dynamic> route) {
+    final points = (route['points'] as List)
+        .map((p) => Offset((p[0] as num).toDouble(), (p[1] as num).toDouble()))
+        .toList();
+    if (points.isEmpty) return;
+    final left = points.map((p) => p.dx).reduce(math.min);
+    final right = points.map((p) => p.dx).reduce(math.max);
+    final top = points.map((p) => p.dy).reduce(math.min);
+    final bottom = points.map((p) => p.dy).reduce(math.max);
+    // Keep both ends above the directions banner, including on a Mac simulator.
+    final height = math.max(120.0, _viewport.height - 145);
+    final scale = math
+        .min(
+          (_viewport.width - 48) / (right - left + 90),
+          height / (bottom - top + 90),
+        )
+        .clamp(.25, 2.2);
+    _transform.value = Matrix4.identity()
+      ..translateByDouble(
+        _viewport.width / 2 - (left + right) / 2 * scale,
+        height / 2 - (top + bottom) / 2 * scale,
+        0,
+        1,
+      )
+      ..scaleByDouble(scale, scale, 1, 1);
+  }
+
+  void _showRouteSteps() {
+    final route = _route;
+    if (route == null) return;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Draft directions · Floor 1',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              Text(route['message'] as String),
+              for (final (index, step) in (route['steps'] as List).indexed)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    radius: 14,
+                    child: Text('${index + 1}'),
+                  ),
+                  title: Text(step.toString()),
+                ),
+              const Text(
+                'Blue: traced corridor · Gold dashed: approximate connection. No live position, distance or walking time.',
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   void didUpdateWidget(covariant CampusMapScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final location = widget.locationToOpen;
-    if (location == null || oldWidget.locationToOpen?.id == location.id) return;
+    final place = widget.locationToOpen;
+    if (place == null || oldWidget.locationToOpen?.id == place.id) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _showLocation(location);
+      _open(place);
       widget.onLocationOpened();
     });
   }
 
   @override
   void dispose() {
+    _transform.dispose();
     _search.dispose();
     super.dispose();
+  }
+
+  void _fit() {
+    final scale = math
+        .min(_viewport.width / 765, (_viewport.height - 40) / 1280)
+        .clamp(.25, 1.0);
+    _transform.value = Matrix4.identity()
+      ..translateByDouble((_viewport.width - 765 * scale) / 2, 12, 0, 1)
+      ..scaleByDouble(scale, scale, 1, 1);
+  }
+
+  void _open(CampusLocation place) {
+    ref.read(appProvider.notifier).selectLocation(place);
+    setState(() {
+      _search.clear();
+      _category = 'All';
+    });
+    if (place.hasPosition && place.mapFloor == 1) {
+      const scale = 1.25;
+      _transform.value = Matrix4.identity()
+        ..translateByDouble(
+          _viewport.width / 2 - place.x * 765 * scale,
+          _viewport.height / 2 - place.y * 1280 * scale,
+          0,
+          1,
+        )
+        ..scaleByDouble(scale, scale, 1, 1);
+    }
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _PlaceDetails(
+        place,
+        onPlanRoute: _routeable(place)
+            ? () {
+                Navigator.pop(context);
+                _planRoute(place);
+              }
+            : null,
+      ),
+    );
+  }
+
+  void _floorInformation() {
+    final places = ref.read(appProvider).locations;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: .65,
+        builder: (_, controller) => ListView(
+          controller: controller,
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+          children: [
+            const Text(
+              'Floors & connections',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Floor 1 has a schematic plan. Other floors have connection information only; their layouts are not mapped.',
+            ),
+            for (final floor in [-1, 1, 2, 3]) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 20, bottom: 8),
+                child: Text(
+                  'Floor $floor${floor == 1 ? ' · current map' : ''}',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+              for (final place in places.where(
+                (p) =>
+                    (p.category == 'Stairs' || p.category == 'Lift') &&
+                    p.floors.contains(floor),
+              ))
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(place.icon),
+                  title: Text(place.name),
+                  subtitle: Text(
+                    'Serves ${place.floors.join(', ')}${place.skipsFloors.isEmpty ? '' : ' · skips ${place.skipsFloors.join(', ')}'}',
+                  ),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _open(place);
+                  },
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(appProvider);
-    final user = state.user;
-    final matches = state.locations.where((location) {
-      final categoryMatch =
-          _category == 'All' || location.category == _category;
-      return categoryMatch && location.matches(state.searchQuery);
-    }).toList();
-
+    final names = state.locations.map((p) => p.category).toSet().toList()
+      ..sort();
+    final matches = state.locations
+        .where(
+          (p) =>
+              (_category == 'All' || p.category == _category) &&
+              p.matches(_search.text),
+        )
+        .toList();
     return SafeArea(
       bottom: false,
-      child: Stack(
+      child: Column(
         children: [
-          Positioned.fill(
-            child: InteractiveViewer(
-              minScale: .72,
-              maxScale: 4,
-              constrained: false,
-              boundaryMargin: const EdgeInsets.all(260),
-              child: SizedBox(
-                width: 520,
-                height: 1160,
-                child: Stack(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Explore SDU',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.navy,
+                        ),
+                      ),
+                      Text(
+                        'Current role: ${state.user?.role.label ?? 'Guest'}',
+                        style: const TextStyle(color: AppColors.muted),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: widget.onOpenAssistant,
+                  tooltip: 'Campus assistant',
+                  icon: const Icon(Icons.auto_awesome),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: _search,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'Search D101, library, stairs…',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _search.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(_search.clear),
+                      ),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          SizedBox(
+            height: 52,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              children: ['All', ...names]
+                  .map(
+                    (name) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(name),
+                        selected: name == _category,
+                        onSelected: (_) => setState(() => _category = name),
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                _viewport = constraints.biggest;
+                if (!_fitted) {
+                  _fitted = true;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _fit();
+                  });
+                }
+                return Stack(
                   children: [
                     Positioned.fill(
-                      child: Image.asset(
-                        'assets/images/campus_map.jpg',
-                        fit: BoxFit.fill,
-                      ),
-                    ),
-                    if (state.routeActive && state.selectedLocation != null)
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: CustomPaint(
-                            painter: _RoutePainter(
-                              destination: state.selectedLocation!,
-                            ),
+                      child: InteractiveViewer(
+                        transformationController: _transform,
+                        constrained: false,
+                        minScale: .25,
+                        maxScale: 4,
+                        boundaryMargin: const EdgeInsets.all(900),
+                        child: SizedBox(
+                          width: 765,
+                          height: 1280,
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: SvgPicture.asset(
+                                  'assets/maps/floor-1-background.svg',
+                                ),
+                              ),
+                              for (final label in catalog.campusMapLabels)
+                                _MapLabel(label),
+                              if (_route != null)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: CustomPaint(
+                                      painter: _DraftRoutePainter(_route!),
+                                    ),
+                                  ),
+                                ),
+                              for (final place in matches.where(
+                                (p) => p.hasPosition && p.mapFloor == 1,
+                              ))
+                                _PlaceOverlay(
+                                  place: place,
+                                  selected:
+                                      state.selectedLocation?.id == place.id,
+                                  saved: state.favorites.contains(place.id),
+                                  onTap: () => _open(place),
+                                ),
+                            ],
                           ),
                         ),
                       ),
-                    ...matches.map(
-                      (location) => _MapPin(
-                        location: location,
-                        selected: state.selectedLocation?.id == location.id,
-                        saved: state.favorites.contains(location.id),
-                        onTap: () => _showLocation(location),
+                    ),
+                    Positioned(
+                      left: 16,
+                      top: 6,
+                      child: ActionChip(
+                        avatar: const Icon(Icons.layers, size: 18),
+                        label: const Text('Floor 1'),
+                        onPressed: _floorInformation,
                       ),
                     ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            left: 16,
-            right: 16,
-            top: 10,
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
+                    Positioned(
+                      right: 16,
+                      bottom: 38,
+                      child: FloatingActionButton.small(
+                        heroTag: 'fit-map',
+                        tooltip: 'Fit map',
+                        onPressed: _fit,
+                        child: const Icon(Icons.center_focus_strong),
+                      ),
+                    ),
+                    const Positioned(
+                      left: 12,
+                      right: 64,
+                      bottom: 8,
+                      child: Text(
+                        'Schematic · positions approximate · pinch to zoom',
+                        style: TextStyle(fontSize: 11, color: AppColors.muted),
+                      ),
+                    ),
+                    if (_route != null)
+                      Positioned(
+                        left: 12,
+                        right: 76,
+                        bottom: 30,
+                        child: Material(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x220B153E),
-                              blurRadius: 20,
-                              offset: Offset(0, 7),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 38,
-                              height: 38,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: AppColors.navy,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                user?.name.characters.first.toUpperCase() ??
-                                    'S',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800,
-                                ),
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(16),
+                          child: ListTile(
+                            onTap: _showRouteSteps,
+                            title: const Text(
+                              'Schematic route · not verified',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    'Hi, ${user?.name ?? 'Explorer'}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: AppColors.navy,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                  Text(
-                                    '${user?.role.label ?? 'Guest'} · SDU Campus',
-                                    style: const TextStyle(
-                                      color: AppColors.muted,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                            subtitle: Text(
+                              '${_route!['start']} → ${_route!['destination']}\nTap for draft directions',
+                              style: const TextStyle(fontSize: 12),
                             ),
-                            IconButton(
-                              onPressed: widget.onOpenAssistant,
-                              icon: const Icon(
-                                Icons.auto_awesome,
-                                color: AppColors.blue,
-                              ),
+                            trailing: IconButton(
+                              tooltip: 'Clear route',
+                              icon: const Icon(Icons.close),
+                              onPressed: () => setState(() => _route = null),
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _search,
-                  onChanged: ref.read(appProvider.notifier).search,
-                  decoration: InputDecoration(
-                    hintText: 'Search rooms, offices, services…',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: state.searchQuery.isEmpty
-                        ? const Icon(Icons.tune)
-                        : IconButton(
-                            onPressed: () {
-                              _search.clear();
-                              ref.read(appProvider.notifier).search('');
-                            },
-                            icon: const Icon(Icons.close),
+                    if (_search.text.isNotEmpty || _category != 'All')
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        top: 54,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: _viewport.height * .55,
                           ),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  height: 40,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    children:
-                        [
-                              'All',
-                              'Classroom',
-                              'Food',
-                              'Study',
-                              'Office',
-                              'Printer',
-                              'Restroom',
-                              'Parking',
-                            ]
-                            .map(
-                              (category) => Padding(
-                                padding: const EdgeInsets.only(right: 7),
-                                child: FilterChip(
-                                  selected: _category == category,
-                                  label: Text(category),
-                                  backgroundColor: Colors.white,
-                                  selectedColor: const Color(0xFFDDE9FF),
-                                  onSelected: (_) =>
-                                      setState(() => _category = category),
-                                ),
-                              ),
-                            )
-                            .toList(),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (state.searchQuery.isNotEmpty)
-            Positioned(
-              left: 16,
-              right: 16,
-              top: 160,
-              child: _SearchResults(
-                locations: matches.take(4).toList(),
-                onTap: _showLocation,
-              ),
-            ),
-          if (user?.role == UserRole.student &&
-              state.searchQuery.isEmpty &&
-              !state.routeActive)
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 18,
-              child: _NextClassCard(
-                onRoute: () =>
-                    _showLocation(state.locations.firstWhere((e) => e.id == 4)),
-              ),
-            ),
-          if (state.routeActive && state.selectedLocation != null)
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 18,
-              child: _RouteSummary(
-                location: state.selectedLocation!,
-                onDetails: () => _showRouteSteps(state.selectedLocation!),
-                onClose: ref.read(appProvider.notifier).clearLocation,
-              ),
-            ),
-          Positioned(
-            right: 14,
-            bottom: state.routeActive || user?.role == UserRole.student
-                ? 132
-                : 18,
-            child: Column(
-              children: [
-                FloatingActionButton.small(
-                  heroTag: 'layers',
-                  backgroundColor: Colors.white,
-                  foregroundColor: AppColors.navy,
-                  onPressed: () => _showLegend(context),
-                  child: const Icon(Icons.layers_outlined),
-                ),
-                const SizedBox(height: 8),
-                FloatingActionButton.small(
-                  heroTag: 'locate',
-                  backgroundColor: AppColors.blue,
-                  foregroundColor: Colors.white,
-                  onPressed: () => _showLocation(state.locations.first),
-                  child: const Icon(Icons.my_location),
-                ),
-              ],
+                          child: Material(
+                            elevation: 5,
+                            borderRadius: BorderRadius.circular(18),
+                            clipBehavior: Clip.antiAlias,
+                            child: matches.isEmpty
+                                ? const Padding(
+                                    padding: EdgeInsets.all(20),
+                                    child: Text(
+                                      'No mapped places match. Try D101, library or stairs.',
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    shrinkWrap: true,
+                                    itemCount: matches.length,
+                                    itemBuilder: (_, index) {
+                                      final place = matches[index];
+                                      return ListTile(
+                                        leading: Icon(place.icon),
+                                        title: Text(place.name),
+                                        subtitle: Text(
+                                          '${place.floor} · ${place.hasPosition ? place.block : 'Position not mapped'}',
+                                        ),
+                                        onTap: () => _open(place),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
           ),
         ],
       ),
     );
   }
-
-  void _showLocation(CampusLocation location) {
-    ref.read(appProvider.notifier).selectLocation(location);
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => _LocationSheet(
-        location: location,
-        onRoute: () {
-          Navigator.pop(context);
-          ref.read(appProvider.notifier).startRoute(location);
-        },
-      ),
-    );
-  }
-
-  void _showRouteSteps(CampusLocation location) => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (_) => _RouteStepsSheet(location: location),
-  );
-
-  void _showLegend(BuildContext context) => showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    builder: (_) => const Padding(
-      padding: EdgeInsets.fromLTRB(24, 0, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Map layers',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              color: AppColors.navy,
-            ),
-          ),
-          SizedBox(height: 16),
-          ListTile(
-            leading: Icon(Icons.meeting_room_outlined),
-            title: Text('Rooms and offices'),
-            trailing: Switch(value: true, onChanged: null),
-          ),
-          ListTile(
-            leading: Icon(Icons.restaurant_outlined),
-            title: Text('Campus services'),
-            trailing: Switch(value: true, onChanged: null),
-          ),
-          ListTile(
-            leading: Icon(Icons.accessible),
-            title: Text('Accessible facilities'),
-            trailing: Switch(value: true, onChanged: null),
-          ),
-        ],
-      ),
-    ),
-  );
 }
 
-class _MapPin extends StatelessWidget {
-  const _MapPin({
-    required this.location,
+class _MapLabel extends StatelessWidget {
+  const _MapLabel(this.label);
+  final Map<String, dynamic> label;
+  @override
+  Widget build(BuildContext context) {
+    final end = label['align'] == 'end';
+    return Positioned(
+      left: (label['x'] as num).toDouble() - (end ? 160 : 0),
+      top: (label['y'] as num).toDouble() - (label['size'] as num).toDouble(),
+      width: 160,
+      child: IgnorePointer(
+        child: Text(
+          label['text'] as String,
+          textAlign: end ? TextAlign.right : TextAlign.left,
+          style: TextStyle(
+            fontSize: (label['size'] as num).toDouble(),
+            height: 1,
+            color: Color(
+              int.parse(
+                (label['color'] as String).replaceFirst('#', 'ff'),
+                radix: 16,
+              ),
+            ),
+            fontWeight: label['bold'] == true
+                ? FontWeight.bold
+                : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaceOverlay extends StatelessWidget {
+  const _PlaceOverlay({
+    required this.place,
     required this.selected,
     required this.saved,
     required this.onTap,
   });
-  final CampusLocation location;
-  final bool selected;
-  final bool saved;
+  final CampusLocation place;
+  final bool selected, saved;
   final VoidCallback onTap;
-
   @override
-  Widget build(BuildContext context) => Positioned(
-    left: location.x * 520 - 24,
-    top: location.y * 1160 - 24,
-    child: GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        width: selected ? 56 : 48,
-        height: selected ? 56 : 48,
-        decoration: BoxDecoration(
-          color: selected ? AppColors.blue : Colors.white,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: saved ? AppColors.gold : AppColors.navy,
-            width: saved ? 3 : 2,
-          ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x44000000),
-              blurRadius: 8,
-              offset: Offset(0, 3),
+  Widget build(BuildContext context) {
+    final room = place.roomBounds;
+    final color = selected
+        ? AppColors.blue
+        : saved
+        ? const Color(0xffb78c45)
+        : AppColors.navy;
+    return Positioned(
+      left: room?.left ?? place.x * 765 - 19,
+      top: room?.top ?? place.y * 1280 - 19,
+      width: room?.width ?? 38,
+      height: room?.height ?? 38,
+      child: Semantics(
+        button: true,
+        label: place.name,
+        child: Tooltip(
+          message: place.name,
+          child: Material(
+            color: room != null ? const Color(0xff833282) : Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(room != null ? 3 : 19),
+              side: BorderSide(
+                color: color,
+                width: selected || saved ? 3 : 1.5,
+              ),
             ),
-          ],
-        ),
-        child: Icon(
-          location.icon,
-          size: 23,
-          color: selected ? Colors.white : AppColors.navy,
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              child: Center(
+                child: room != null
+                    ? Text(
+                        place.name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      )
+                    : place.mapKey.startsWith('stair_main_')
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(place.icon, size: 16, color: color),
+                          Text(
+                            int.parse(place.mapKey.split('_').last).toString(),
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: color,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Icon(place.icon, size: 22, color: color),
+              ),
+            ),
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
-class _RoutePainter extends CustomPainter {
-  const _RoutePainter({required this.destination});
-  final CampusLocation destination;
-
+class _DraftRoutePainter extends CustomPainter {
+  _DraftRoutePainter(this.route);
+  final Map<String, dynamic> route;
+  Offset _point(dynamic value) =>
+      Offset((value[0] as num).toDouble(), (value[1] as num).toDouble());
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
+    final segments = route['segments'] as List;
+    final white = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 10
+      ..strokeCap = StrokeCap.round;
+    final blue = Paint()
       ..color = AppColors.blue
-      ..strokeWidth = 8
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    final start = Offset(.72 * size.width, .76 * size.height);
-    final end = Offset(destination.x * size.width, destination.y * size.height);
-    final path = Path()
-      ..moveTo(start.dx, start.dy)
-      ..lineTo(.58 * size.width, .70 * size.height)
-      ..lineTo(.57 * size.width, .50 * size.height)
-      ..lineTo(end.dx, end.dy);
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = Colors.white
-        ..strokeWidth = 14
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round,
-    );
-    canvas.drawPath(path, paint);
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round;
+    final gold = Paint()
+      ..color = const Color(0xffbd7a19)
+      ..strokeWidth = 5
+      ..strokeCap = StrokeCap.round;
+    for (final segment in segments) {
+      final a = _point(segment['from']), b = _point(segment['to']);
+      canvas.drawLine(a, b, white);
+      if (segment['approximate_door'] == true) {
+        final length = (b - a).distance;
+        for (double d = 0; d < length; d += 13) {
+          canvas.drawLine(
+            Offset.lerp(a, b, d / length)!,
+            Offset.lerp(a, b, math.min(d + 7, length) / length)!,
+            gold,
+          );
+        }
+      } else {
+        canvas.drawLine(a, b, blue);
+      }
+    }
+    final points = route['points'] as List;
+    if (points.isNotEmpty) {
+      for (final point in [points.first, points.last]) {
+        canvas.drawCircle(_point(point), 8, Paint()..color = Colors.white);
+        canvas.drawCircle(_point(point), 5, Paint()..color = AppColors.blue);
+      }
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _RoutePainter oldDelegate) =>
-      oldDelegate.destination.id != destination.id;
+  bool shouldRepaint(covariant _DraftRoutePainter oldDelegate) =>
+      oldDelegate.route != route;
 }
 
-class _SearchResults extends StatelessWidget {
-  const _SearchResults({required this.locations, required this.onTap});
-  final List<CampusLocation> locations;
-  final ValueChanged<CampusLocation> onTap;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    elevation: 8,
-    borderRadius: BorderRadius.circular(18),
-    child: locations.isEmpty
-        ? const Padding(
-            padding: EdgeInsets.all(20),
-            child: Text('No exact match. Try a room code, block, or service.'),
-          )
-        : Column(
-            mainAxisSize: MainAxisSize.min,
-            children: locations
-                .map(
-                  (location) => ListTile(
-                    leading: Icon(location.icon, color: AppColors.blue),
-                    title: Text(location.name),
-                    subtitle: Text('${location.block} · ${location.floor}'),
-                    onTap: () => onTap(location),
-                  ),
-                )
-                .toList(),
-          ),
-  );
-}
-
-class _NextClassCard extends StatelessWidget {
-  const _NextClassCard({required this.onRoute});
-  final VoidCallback onRoute;
-
-  @override
-  Widget build(BuildContext context) => Card(
-    color: AppColors.navy,
-    child: InkWell(
-      borderRadius: BorderRadius.circular(20),
-      onTap: onRoute,
-      child: const Padding(
-        padding: EdgeInsets.all(16),
-        child: Row(
-          children: [
-            CircleAvatar(
-              backgroundColor: Color(0xFF314079),
-              child: Icon(Icons.schedule, color: Colors.white),
-            ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'NEXT CLASS · 10:30',
-                    style: TextStyle(
-                      color: Color(0xFFB9C5EA),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Project Management · Room 317',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.arrow_forward, color: Colors.white),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _LocationSheet extends ConsumerWidget {
-  const _LocationSheet({required this.location, required this.onRoute});
-  final CampusLocation location;
-  final VoidCallback onRoute;
-
+class _PlaceDetails extends ConsumerWidget {
+  const _PlaceDetails(this.place, {this.onPlanRoute});
+  final CampusLocation place;
+  final VoidCallback? onPlanRoute;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isGuest = ref.watch(
-      appProvider.select((s) => s.user?.role == UserRole.guest),
-    );
-    final saved = ref.watch(
-      appProvider.select((s) => s.favorites.contains(location.id)),
-    );
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 30),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 26,
-                backgroundColor: const Color(0xFFE4EEFF),
-                child: Icon(location.icon, color: AppColors.blue),
+    final state = ref.watch(appProvider);
+    final guest = state.user?.role == UserRole.guest;
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Icon(place.icon, color: AppColors.blue),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    place.name,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                if (!guest)
+                  IconButton(
+                    tooltip: 'Save place',
+                    onPressed: () async {
+                      final error = await ref
+                          .read(appProvider.notifier)
+                          .toggleFavorite(place.id);
+                      if (error != null && context.mounted) {
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(SnackBar(content: Text(error)));
+                      }
+                    },
+                    icon: Icon(
+                      state.favorites.contains(place.id)
+                          ? Icons.bookmark
+                          : Icons.bookmark_border,
+                    ),
+                  ),
+              ],
+            ),
+            Text(
+              '${place.block} · ${place.floor}',
+              style: const TextStyle(color: AppColors.muted),
+            ),
+            const SizedBox(height: 16),
+            if (!guest &&
+                !state.favorites.contains(place.id) &&
+                state.favorites.length >= 5)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  '5/5 places saved. Remove a saved place in Profile before saving another.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
               ),
-              const SizedBox(width: 14),
-              Expanded(
+            if (!place.hasPosition)
+              _info(
+                Icons.location_off,
+                'Exact position is not mapped. No pin is shown.',
+              ),
+            if (place.hasPosition)
+              _info(
+                Icons.info_outline,
+                'Approximate position on the schematic; not surveyed.',
+              ),
+            if (place.access != 'public')
+              _info(Icons.lock_outline, '${place.access} access'),
+            if (place.floors.length > 1)
+              _info(Icons.layers, 'Serves floors ${place.floors.join(', ')}'),
+            if (place.skipsFloors.isNotEmpty)
+              _info(
+                Icons.warning_amber,
+                'Skips floor ${place.skipsFloors.join(', ')}. Leads to the floor-3 canteen, not the general corridor.',
+              ),
+            if (place.entrancesFromFloors.isNotEmpty)
+              _info(
+                Icons.door_front_door,
+                'Entrances on floors ${place.entrancesFromFloors.join(', ')}',
+              ),
+            if (place.category == 'Stairs')
+              _info(Icons.accessible, 'Stairs are not a step-free option.'),
+            if (place.category == 'Lift')
+              _info(
+                Icons.accessible,
+                place.floors.isEmpty
+                    ? 'Lift location recorded; served floors and step-free approaches are not yet confirmed.'
+                    : 'Lift connection recorded; approaches and landings are not verified.',
+              ),
+            if (place.hours != 'Not confirmed')
+              _info(Icons.schedule, place.hours),
+            if (place.contact != 'Not confirmed')
+              _info(Icons.contact_phone, place.contact),
+            if (place.notes.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text(place.notes),
+              ),
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      location.category.toUpperCase(),
-                      style: const TextStyle(
-                        color: AppColors.blue,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.2,
-                      ),
+                      onPlanRoute != null
+                          ? 'Schematic routing available'
+                          : 'Approach not mapped yet',
+                      style: TextStyle(fontWeight: FontWeight.bold),
                     ),
+                    const SizedBox(height: 6),
                     Text(
-                      location.name,
-                      style: const TextStyle(
-                        fontSize: 24,
-                        color: AppColors.navy,
-                        fontWeight: FontWeight.w800,
-                      ),
+                      onPlanRoute != null
+                          ? 'A draft floor-1 path can be traced to this place. Doorways and accessibility are approximate, not surveyed. No walking distance or time is estimated.'
+                          : 'This location has no traced floor-1 approach. Other floor layouts are not mapped. No route can be drawn to it yet.',
                     ),
                   ],
                 ),
               ),
-              if (!isGuest)
-                IconButton(
-                  onPressed: () => ref
-                      .read(appProvider.notifier)
-                      .toggleFavorite(location.id),
-                  icon: Icon(
-                    saved ? Icons.bookmark : Icons.bookmark_border,
-                    color: saved ? AppColors.gold : AppColors.navy,
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          _InfoRow(
-            Icons.location_on_outlined,
-            '${location.block} · ${location.floor}',
-          ),
-          _InfoRow(Icons.schedule, location.hours),
-          _InfoRow(Icons.call_outlined, location.contact),
-          _InfoRow(
-            Icons.accessible,
-            location.accessible
-                ? 'Accessible entrance and elevator available'
-                : 'Limited accessibility information',
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              if (!isGuest) ...[
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _report(context, location),
-                    icon: const Icon(Icons.flag_outlined),
-                    label: const Text('Report info'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-              ],
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: onRoute,
-                  icon: const Icon(Icons.directions),
-                  label: const Text('Route'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.blue,
-                  ),
-                ),
+            ),
+            if (onPlanRoute != null)
+              FilledButton.icon(
+                onPressed: onPlanRoute,
+                icon: const Icon(Icons.route),
+                label: const Text('Plan draft route'),
               ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _report(BuildContext context, CampusLocation location) {
-    Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Report started for ${location.name}. Open Profile → Reports to submit.',
+            if (!guest)
+              TextButton.icon(
+                onPressed: () {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Use Profile → Report outdated information to submit a correction.',
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.flag_outlined),
+                label: const Text('Report outdated information'),
+              ),
+          ],
         ),
       ),
     );
   }
-}
 
-class _InfoRow extends StatelessWidget {
-  const _InfoRow(this.icon, this.text);
-  final IconData icon;
-  final String text;
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 7),
+  Widget _info(IconData icon, String text) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 5),
     child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 21, color: AppColors.muted),
-        const SizedBox(width: 12),
-        Expanded(child: Text(text, style: const TextStyle(fontSize: 15))),
+        Icon(icon, size: 19, color: AppColors.muted),
+        const SizedBox(width: 10),
+        Expanded(child: Text(text)),
       ],
     ),
   );
-}
-
-class _RouteSummary extends StatelessWidget {
-  const _RouteSummary({
-    required this.location,
-    required this.onDetails,
-    required this.onClose,
-  });
-  final CampusLocation location;
-  final VoidCallback onDetails;
-  final VoidCallback onClose;
-  @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          const CircleAvatar(
-            backgroundColor: AppColors.blue,
-            child: Icon(Icons.directions_walk, color: Colors.white),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  location.name,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.navy,
-                  ),
-                ),
-                const Text(
-                  '6 min · 420 m · via central atrium',
-                  style: TextStyle(color: AppColors.muted, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          TextButton(onPressed: onDetails, child: const Text('Steps')),
-          IconButton(onPressed: onClose, icon: const Icon(Icons.close)),
-        ],
-      ),
-    ),
-  );
-}
-
-class _RouteStepsSheet extends ConsumerWidget {
-  const _RouteStepsSheet({required this.location});
-  final CampusLocation location;
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final accessible = ref.watch(appProvider.select((s) => s.accessibleRoutes));
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: .67,
-      maxChildSize: .9,
-      builder: (_, controller) => ListView(
-        controller: controller,
-        padding: const EdgeInsets.fromLTRB(24, 0, 24, 28),
-        children: [
-          Text(
-            'Route to ${location.name}',
-            style: const TextStyle(
-              fontSize: 25,
-              fontWeight: FontWeight.w800,
-              color: AppColors.navy,
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            '6 min · 420 metres',
-            style: TextStyle(color: AppColors.muted),
-          ),
-          const SizedBox(height: 12),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text(
-              'Accessible route',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            subtitle: const Text('Avoid stairs and use elevators'),
-            value: accessible,
-            onChanged: ref.read(appProvider.notifier).setAccessible,
-          ),
-          const Divider(),
-          ...routeSteps.indexed.map(
-            (entry) => ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: CircleAvatar(
-                backgroundColor: const Color(0xFFE4EEFF),
-                child: Text(
-                  '${entry.$1 + 1}',
-                  style: const TextStyle(
-                    color: AppColors.blue,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              title: Text(entry.$2.instruction),
-              subtitle: entry.$2.minutes == 0
-                  ? const Text('Destination')
-                  : Text('${entry.$2.minutes} min'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }

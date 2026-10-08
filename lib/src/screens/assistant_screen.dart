@@ -7,7 +7,7 @@ import '../theme.dart';
 
 class CampusAssistantScreen extends ConsumerStatefulWidget {
   const CampusAssistantScreen({super.key, required this.onShowMap});
-  final VoidCallback onShowMap;
+  final ValueChanged<CampusLocation> onShowMap;
 
   @override
   ConsumerState<CampusAssistantScreen> createState() =>
@@ -25,7 +25,7 @@ class _CampusAssistantScreenState extends ConsumerState<CampusAssistantScreen> {
   final _controller = TextEditingController();
   final _messages = <_Message>[
     const _Message(
-      'Hi! Ask me where a room or service is. I can also recommend food, study spaces, parking, printers, or an accessible route.',
+      'Hi! Ask about rooms, services or floor connections. Draft routes follow the floor-1 schematic; doorways and accessibility are not verified.',
       false,
     ),
   ];
@@ -51,35 +51,40 @@ class _CampusAssistantScreenState extends ConsumerState<CampusAssistantScreen> {
     final q = query.toLowerCase();
     final locations = ref.read(appProvider).locations;
     CampusLocation? location;
-    if (q.contains('next class') || q.contains('317')) {
-      location = locations.firstWhere((e) => e.id == 4);
-      return _Message(
-        'Your next class is Project Management at 10:30 in Room 317, Block F, 3rd floor. It is about 6 minutes away.',
+    if (q.contains('next class')) {
+      return const _Message(
+        'Your timetable is still demonstration data. Its classrooms are not confirmed on this floor plan, so I cannot show a verified next-class route.',
         false,
-        location,
       );
     }
     if (q.contains('park')) {
-      location = locations.firstWhere((e) => e.id == 10);
+      return const _Message(
+        'Parking is not recorded in the supplied map yet. I cannot place it accurately.',
+        false,
+      );
     }
     if (q.contains('print')) {
-      location = locations.firstWhere((e) => e.id == 7);
+      location = locations.where((e) => e.id == 7).firstOrNull;
     }
     if (q.contains('eat') || q.contains('food') || q.contains('coffee')) {
-      location = locations.firstWhere((e) => e.id == 3);
+      location = locations.where((e) => e.id == 3).firstOrNull;
     }
     if (q.contains('library') || q.contains('study')) {
-      location = locations.firstWhere((e) => e.id == 2);
+      location = locations.where((e) => e.id == 2).firstOrNull;
     }
     if (q.contains('medical') || q.contains('doctor')) {
-      location = locations.firstWhere((e) => e.id == 6);
+      location = locations.where((e) => e.id == 6).firstOrNull;
     }
     if (q.contains('toilet') || q.contains('restroom')) {
-      location = locations.firstWhere((e) => e.id == 8);
+      return const _Message(
+        'There are several restrooms, including staff-only ones. Search Restroom on the map and choose the relevant location.',
+        false,
+      );
     }
+    location ??= locations.where((e) => e.matches(q)).firstOrNull;
     if (location != null) {
       return _Message(
-        'I found ${location.name} in ${location.block}, ${location.floor}. Tap below to show it on the map and start directions.',
+        'I found ${location.name}: ${location.block}, ${location.floor}. Tap below for details. ${location.hasPosition ? 'Its position is approximate on the schematic.' : 'Its exact position is not mapped.'} Open its details to check whether a draft floor-1 route is available.',
         false,
         location,
       );
@@ -116,7 +121,7 @@ class _CampusAssistantScreenState extends ConsumerState<CampusAssistantScreen> {
                     ),
                   ),
                   Text(
-                    'Online · uses live campus data',
+                    'Supplied campus facts · schematic map',
                     style: TextStyle(color: AppColors.muted, fontSize: 12),
                   ),
                 ],
@@ -184,7 +189,7 @@ class _CampusAssistantScreenState extends ConsumerState<CampusAssistantScreen> {
                             ref
                                 .read(appProvider.notifier)
                                 .selectLocation(message.location!);
-                            widget.onShowMap();
+                            widget.onShowMap(message.location!);
                           },
                           icon: const Icon(Icons.map_outlined),
                           label: const Text('Show on map'),

@@ -99,6 +99,22 @@ class ApiClient {
         .toList();
   }
 
+  Future<Map<String, dynamic>> draftRoute(
+    int start,
+    int destination,
+    bool avoidStairs,
+  ) async {
+    final response = await _dio.get(
+      '/routes',
+      queryParameters: {
+        'start': start,
+        'destination': destination,
+        'accessible': avoidStairs,
+      },
+    );
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
   Future<List<Map<String, dynamic>>> announcements() async {
     final response = await _dio.get('/announcements');
     return (response.data as List)

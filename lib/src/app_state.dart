@@ -12,7 +12,7 @@ class AppState {
     this.user,
     this.selectedLocation,
     this.searchQuery = '',
-    this.favorites = const {2, 4},
+    this.favorites = const {},
     this.accessibleRoutes = false,
     this.routeActive = false,
     this.busy = false,
@@ -65,7 +65,7 @@ class AppController extends Notifier<AppState> {
   final ApiClient _api = ApiClient();
 
   @override
-  AppState build() => const AppState(
+  AppState build() => AppState(
     locations: demo.campusLocations,
     announcements: demo.announcements,
   );
@@ -164,9 +164,18 @@ class AppController extends Notifier<AppState> {
 
   Future<void> _syncRemote() async {
     try {
-      final remoteLocations = (await _api.locations())
-          .map(CampusLocation.fromJson)
-          .toList();
+      final rows = await _api.locations();
+      final remoteLocations = demo.campusLocations.map((known) {
+        final row = rows.where((r) => r['id'] == known.id).firstOrNull;
+        if (row == null) return known;
+        final catalog = demo.campusCatalog[known.id]!;
+        return CampusLocation.fromJson({...catalog, ...row});
+      }).toList();
+      remoteLocations.addAll(
+        rows
+            .where((row) => !demo.campusCatalog.containsKey(row['id']))
+            .map(CampusLocation.fromJson),
+      );
       final remoteAnnouncements = (await _api.announcements())
           .map(CampusAnnouncement.fromJson)
           .toList();
@@ -205,18 +214,36 @@ class AppController extends Notifier<AppState> {
     }
   }
 
-  void toggleFavorite(int id) {
-    if (state.user?.role == UserRole.guest) return;
+  bool _savingFavorite = false;
+  Future<String?> toggleFavorite(int id) async {
+    if (state.user == null || state.user?.role == UserRole.guest) {
+      return 'Log in to save places.';
+    }
+    if (_savingFavorite) return 'A save is in progress. Please try again.';
     final next = {...state.favorites};
     final removing = next.contains(id);
-    removing ? next.remove(id) : next.add(id);
-    state = state.copyWith(favorites: next);
-    unawaited(removing ? _api.removeFavorite(id) : _api.addFavorite(id));
+    if (!removing && next.length >= 5) {
+      return 'You can save up to 5 places. Remove one before saving another.';
+    }
+    _savingFavorite = true;
+    try {
+      await (removing ? _api.removeFavorite(id) : _api.addFavorite(id));
+      removing ? next.remove(id) : next.add(id);
+      state = state.copyWith(favorites: next);
+      return null;
+    } catch (error) {
+      return _friendlyError(
+        error,
+        'Could not update saved places. Check your connection and try again.',
+      );
+    } finally {
+      _savingFavorite = false;
+    }
   }
 
   Future<void> logout() async {
     await _api.logout();
-    state = const AppState(
+    state = AppState(
       locations: demo.campusLocations,
       announcements: demo.announcements,
     );

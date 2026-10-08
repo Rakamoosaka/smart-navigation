@@ -32,6 +32,16 @@ class CampusLocation {
     this.contact = '+7 727 307 95 65',
     this.accessible = true,
     this.aliases = const [],
+    this.mapKey = '',
+    this.mapFloor = 1,
+    this.hasPosition = false,
+    this.floors = const [],
+    this.notes = '',
+    this.access = 'public',
+    this.positionStatus = '',
+    this.roomBounds,
+    this.skipsFloors = const [],
+    this.entrancesFromFloors = const [],
   });
 
   final int id;
@@ -46,6 +56,16 @@ class CampusLocation {
   final String contact;
   final bool accessible;
   final List<String> aliases;
+  final String mapKey;
+  final int? mapFloor;
+  final bool hasPosition;
+  final List<int> floors;
+  final String notes;
+  final String access;
+  final String positionStatus;
+  final Rect? roomBounds;
+  final List<int> skipsFloors;
+  final List<int> entrancesFromFloors;
 
   factory CampusLocation.fromJson(Map<String, dynamic> json) {
     final category = json['category']?.toString() ?? 'Service';
@@ -66,6 +86,24 @@ class CampusLocation {
           .where((value) => value.trim().isNotEmpty)
           .map((value) => value.trim())
           .toList(),
+      mapKey: json['map_key']?.toString() ?? '',
+      mapFloor: json['map_floor'] as int?,
+      hasPosition: json['has_position'] == true,
+      floors: (json['floors'] as List? ?? []).cast<int>(),
+      notes: json['notes']?.toString() ?? '',
+      access: json['access']?.toString() ?? 'public',
+      positionStatus: json['position_status']?.toString() ?? '',
+      roomBounds: json['geometry'] is Map
+          ? Rect.fromLTWH(
+              (json['geometry']['x'] as num).toDouble(),
+              (json['geometry']['y'] as num).toDouble(),
+              (json['geometry']['width'] as num).toDouble(),
+              (json['geometry']['height'] as num).toDouble(),
+            )
+          : null,
+      skipsFloors: (json['skips_floors'] as List? ?? []).cast<int>(),
+      entrancesFromFloors: (json['entrances_from_floors'] as List? ?? [])
+          .cast<int>(),
     );
   }
 
@@ -119,9 +157,13 @@ IconData iconForCategory(String category) => switch (category.toLowerCase()) {
   'office' => Icons.badge_outlined,
   'health' => Icons.medical_services_outlined,
   'printer' => Icons.print_outlined,
-  'restroom' => Icons.accessible,
+  'restroom' => Icons.wc,
   'finance' => Icons.account_balance_outlined,
   'parking' => Icons.local_parking,
+  'stairs' => Icons.stairs_outlined,
+  'lift' => Icons.elevator_outlined,
+  'hall' => Icons.groups_outlined,
+  'recreation' => Icons.sports_tennis,
   _ => Icons.place_outlined,
 };
 

@@ -38,6 +38,7 @@ dependencies:
   go_router: ^18.0.2
   dio: ^5.11.1
   flutter_secure_storage: ^11.2.0
+  flutter_svg: ^2.3.0
 
 dev_dependencies:
   flutter_test:
@@ -62,6 +63,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/maps/
     - assets/images/campus_map.jpg
     - assets/images/sdu_30_logo.png
 

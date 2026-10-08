@@ -6,6 +6,9 @@ import hmac
 import os
 import re
 import secrets
+import json
+from .routing import draft_route
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from uuid import uuid4
@@ -22,6 +25,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sdu_campus.db")
 JWT_SECRET = os.getenv("JWT_SECRET", "sdu-campus-course-demo-secret")
 engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 security = HTTPBearer(auto_error=False)
+CAMPUS_MAP = json.loads((Path(__file__).parent / 'data/campus.json').read_text())
+MAP_LOCATIONS = {p['id']: p for p in CAMPUS_MAP['places']}
 
 
 class User(SQLModel, table=True):
@@ -317,6 +322,19 @@ def seed_database() -> None:
             for sdu_id in DEMO_USERS:
                 email = f"{sdu_id}@sdu.edu.kz"
                 session.add(CampusClass(owner_email=email, course="Project Management", room="317", starts_at="10:30", location_id=4, kind="teacher" if email == "240000001@sdu.edu.kz" else "student"))
+        # Import confirmed map records once; preserve admin edits on later starts.
+        for record in MAP_LOCATIONS.values():
+            marker = '[campus-map-v1]'
+            item = session.get(Location, record['id'])
+            if item is not None and marker in item.aliases:
+                continue
+            if item is None:
+                item = Location(id=record['id'], name=record['name'], category=record['category'],
+                                block=record['block'], floor=record['floor'], x=record['x'], y=record['y'])
+            for field in ('name', 'category', 'block', 'floor', 'x', 'y', 'opening_hours', 'contact', 'accessible'):
+                setattr(item, field, record[field])
+            item.aliases = record['aliases'] + ',' + marker
+            session.add(item)
         session.commit()
 
 
@@ -416,10 +434,15 @@ def update_preferences(body: PreferenceRequest, identity: Identity, session: DbS
 
 @app.get("/locations", response_model=list[Location], tags=["Campus"])
 def locations(session: DbSession, category: str | None = None) -> list[Location]:
-    statement = select(Location)
+    statement = select(Location).where(Location.id.notin_([4, 5, 8, 9, 10, 11, 12]))
     if category:
         statement = statement.where(Location.category == category)
     return list(session.exec(statement).all())
+
+
+@app.get('/campus-map', tags=['Campus'])
+def campus_map() -> dict:
+    return CAMPUS_MAP
 
 
 @app.get("/locations/{location_id}", response_model=Location, tags=["Campus"])
@@ -433,16 +456,18 @@ def location(location_id: int, session: DbSession) -> Location:
 @app.get("/search", response_model=list[Location], tags=["Campus"])
 def search_locations(session: DbSession, q: str = Query(min_length=1), actor: str = "public") -> list[Location]:
     pattern = f"%{q.strip()}%"
-    statement = select(Location).where(or_(Location.name.ilike(pattern), Location.category.ilike(pattern), Location.block.ilike(pattern), Location.aliases.ilike(pattern)))
+    statement = select(Location).where(Location.id.notin_([4, 5, 8, 9, 10, 11, 12]), or_(Location.name.ilike(pattern), Location.category.ilike(pattern), Location.block.ilike(pattern), Location.aliases.ilike(pattern)))
     results = list(session.exec(statement).all())
     session.add(SearchLog(actor=actor, query=q))
     session.commit()
+    for item in results:
+        session.refresh(item)
     return results
 
 
 @app.get("/services", response_model=list[Location], tags=["Campus"])
 def services(session: DbSession) -> list[Location]:
-    return list(session.exec(select(Location).where(Location.category != "Classroom")).all())
+    return [item for item in locations(session) if item.category != 'Classroom']
 
 
 @app.get("/announcements", response_model=list[Announcement], tags=["Campus"])
@@ -455,18 +480,22 @@ def get_route(session: DbSession, destination: int, start: int = 1, accessible: 
     target = session.get(Location, destination)
     if not target:
         raise HTTPException(status_code=404, detail="Destination not found")
-    steps = ["Enter through the main Block C entrance", "Continue through the central atrium", f"Follow signs toward {target.block}", "Use the elevator" if accessible else "Use the nearest stairs or elevator", f"Arrive at {target.name}"]
-    return {"start_location_id": start, "destination": target, "distance_m": 420, "duration_min": 7 if accessible else 6, "accessible": accessible, "steps": steps}
+    return draft_route(CAMPUS_MAP, start, destination, accessible)
 
 
 @app.post("/assistant/query", tags=["Assistant"])
 def assistant(body: AssistantRequest, session: DbSession) -> dict:
     q = body.question.lower()
-    mapping = {"park": 10, "print": 7, "eat": 3, "food": 3, "coffee": 3, "library": 2, "study": 2, "medical": 6, "doctor": 6, "toilet": 8, "restroom": 8, "317": 4, "next class": 4}
+    if 'next class' in q or 'park' in q:
+        return {'answer': 'This destination is not confirmed on the supplied map. Timetables remain demonstration data.', 'location': None, 'needs_clarification': False}
+    mapping = {"print": 7, "eat": 3, "food": 3, "coffee": 3, "library": 2, "study": 2, "medical": 6, "doctor": 6}
     matched_id = next((value for key, value in mapping.items() if key in q), None)
     if matched_id:
         item = session.get(Location, matched_id)
         return {"answer": f"I found {item.name} in {item.block}, {item.floor}.", "location": item, "needs_clarification": False}
+    matches = [p for p in locations(session) if q in p.name.lower() or q in p.aliases.lower()]
+    if len(matches) == 1:
+        return {'answer': f'I found {matches[0].name}. Routing is not mapped yet.', 'location': matches[0], 'needs_clarification': False}
     return {"answer": "Do you mean a classroom, office, food service, or another facility?", "location": None, "needs_clarification": True}
 
 
@@ -510,8 +539,15 @@ def add_favorite(location_id: int, identity: Identity, session: DbSession) -> di
     user = user_for_identity(identity, session)
     if not user:
         raise HTTPException(status_code=403, detail="Registered account required")
+    if not session.get(Location, location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    # Serialize saves per account in PostgreSQL so concurrent requests cannot exceed 5.
+    session.exec(select(User).where(User.id == user.id).with_for_update()).one()
     existing = session.exec(select(Favorite).where(Favorite.user_id == user.id, Favorite.location_id == location_id)).first()
     if not existing:
+        saved = session.exec(select(Favorite).where(Favorite.user_id == user.id)).all()
+        if len(saved) >= 5:
+            raise HTTPException(status_code=409, detail="You can save up to 5 places. Remove one before saving another.")
         session.add(Favorite(user_id=user.id, location_id=location_id))
         session.commit()
     return {"saved": True, "location_id": location_id}

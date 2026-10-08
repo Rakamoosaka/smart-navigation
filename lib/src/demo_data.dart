@@ -2,7 +2,11 @@ import 'package:flutter/material.dart';
 
 import 'models.dart';
 
-const campusLocations = <CampusLocation>[
+List<CampusLocation> campusLocations = [];
+Map<int, Map<String, dynamic>> campusCatalog = {};
+List<Map<String, dynamic>> campusMapLabels = [];
+Map<String, dynamic> campusRouting = {};
+const legacyCampusLocations = <CampusLocation>[
   CampusLocation(
     id: 1,
     name: 'Main Entrance',
